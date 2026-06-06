@@ -1,0 +1,25 @@
+Package: sacADos
+Type: Package
+Title: Discrete Optimisation for Feature Selection: the 0-1 Knapsack Problem in R and Rcpp
+Version: 0.1.0
+Date: 2026-06-03
+Author: Mahir Dursunoglu
+Maintainer: Mahir Dursunoglu <mahir.dursunoglu@mindlapse.ai>
+Description: Implementations of the 0-1 knapsack problem applied to feature
+    selection under a resource budget. Provides a naive exhaustive search and a
+    dynamic-programming solver in R and Rcpp, a branch-and-bound solver using a
+    max-heap priority queue in Rcpp, and a fast heuristic (greedy construction
+    plus k-exchange local search) with a computable LP optimality bound. Also
+    provides instance generators for several weight/value distributions used to
+    benchmark the algorithms.
+License: GPL-3
+Encoding: UTF-8
+Imports: Rcpp (>= 1.0.5)
+Suggests:
+    devtools,
+    testthat (>= 3.0.0),
+    rmarkdown,
+    ggplot2,
+    microbenchmark
+LinkingTo: Rcpp
+RoxygenNote: 7.3.3

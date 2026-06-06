@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.o
+*.so
+*.dll
+src/*.o
+src/*.so
+src/RcppExports.o
+inst/report/*_files/
+inst/report/*.tex
+inst/report/*.log
+.DS_Store

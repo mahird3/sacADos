@@ -1,0 +1,30 @@
+useDynLib(sacADos, .registration=TRUE)
+
+##### Instance generation
+export(generate_knapsack)
+
+##### Exact solvers (R)
+export(knapsack_naive)
+export(knapsack_dp)
+
+##### Bounds and heuristic (R)
+export(knapsack_lp_bound)
+export(knapsack_greedy)
+export(knapsack_heuristic)
+
+##### Online (streaming) heuristic
+export(knapsack_online)
+export(psi_linear)
+export(psi_power)
+export(psi_exponential)
+export(time_space_knapsack)
+export(knapsack_adaptive)
+
+##### Rcpp solvers (method ii = DP, method iii = adaptive heuristic)
+export(knapsack_dp_Rcpp)
+export(knapsack_adaptive_Rcpp)
+
+##### import from PACKAGES
+importFrom("stats", "runif")
+
+importFrom(Rcpp, evalCpp)
