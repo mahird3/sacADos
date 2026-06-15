@@ -7,11 +7,10 @@ Author: Mahir Dursunoglu
 Maintainer: Mahir Dursunoglu <mahir.dursunoglu@mindlapse.ai>
 Description: Implementations of the 0-1 knapsack problem applied to feature
     selection under a resource budget. Provides a naive exhaustive search and a
-    dynamic-programming solver in R and Rcpp, a branch-and-bound solver using a
-    max-heap priority queue in Rcpp, and a fast heuristic (greedy construction
-    plus k-exchange local search) with a computable LP optimality bound. Also
-    provides instance generators for several weight/value distributions used to
-    benchmark the algorithms.
+    dynamic-programming solver in R and Rcpp, a self-tuning online heuristic
+    (knapsack_adaptive) in R and Rcpp, and an LP upper bound for gap certification.
+    Also provides instance generators for the four Pisinger weight/value families
+    used to benchmark the algorithms.
 License: GPL-3
 Encoding: UTF-8
 Imports: Rcpp (>= 1.0.5)

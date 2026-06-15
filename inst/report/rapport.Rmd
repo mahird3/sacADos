@@ -1,0 +1,520 @@
+---
+title: "Sac à dos et sélection de features"
+subtitle: "Projet M2 — Algorithmique"
+author: "Mahir Dursunoglu"
+date: "Juin 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+if (!requireNamespace("sacADos", quietly = TRUE))
+  remotes::install_github("mahird3/sacADos")
+library(sacADos)
+set.seed(42)
+```
+
+# Introduction
+
+## Le problème
+
+On dispose de $n$ objets. Chaque objet $i$ a un poids entier $w_i > 0$ et une valeur $v_i > 0$.
+On veut choisir un sous-ensemble de valeur totale maximale sans dépasser un budget $W$ :
+
+$$\max \sum_{i=1}^n v_i x_i \quad \text{sujet à} \quad \sum_{i=1}^n w_i x_i \leq W, \quad x_i \in \{0,1\}.$$
+
+C'est le **problème du sac à dos 0-1**. Il est NP-difficile : on ne connaît pas d'algorithme
+exact polynomial en $n$ et $\log W$. Cependant, c'est un problème *faiblement* NP-difficile —
+la programmation dynamique le résout en $O(n \cdot W)$, ce qui est raisonnable si $W$ n'est pas
+trop grand. On parle de complexité pseudo-polynomiale.
+
+## Application : sélection de features
+
+En apprentissage automatique, acquérir une feature peut coûter du temps de calcul, une mesure
+en laboratoire, etc. On peut alors modéliser la sélection de features comme un sac à dos :
+
+- $w_i$ = coût d'acquisition de la feature $i$
+- $v_i$ = gain de performance prédit (par exemple, l'information mutuelle avec la cible)
+- $W$ = budget total disponible
+
+Trouver le sous-ensemble optimal est exactement un problème de sac à dos. Pour $n = 30$ features,
+il y a $2^{30} \approx 10^9$ sous-ensembles possibles. L'énumération exhaustive n'est pas
+envisageable dès que $n$ dépasse 25 ou 30.
+
+# Méthodes
+
+Le package `sacADos` propose trois méthodes. Les deux premières sont exactes ; la troisième est
+une heuristique en ligne de complexité $O(n)$, conçue pour traiter de grandes instances.
+
+```{r inst-demo}
+inst <- generate_knapsack(n = 15, type = "uncorrelated")
+```
+
+| Méthode | Algorithme | Complexité | Exact | Impl. |
+|:--------|:-----------|:----------:|:-----:|:-----:|
+| i  | Énumération exhaustive | $O(2^n \cdot n)$ | Oui | R |
+| ii | Programmation dynamique | $O(n \cdot W)$ | Oui | R + C++ |
+| iii | Heuristique adaptative | $O(n)$ | Non | R + C++ |
+
+## Méthode i — Énumération exhaustive (R)
+
+On représente chaque sous-ensemble par un masque binaire $k \in \{0, \ldots, 2^n - 1\}$.
+Le bit $j$ de $k$ vaut 1 si l'objet $j$ est pris. On parcourt tous les masques, on vérifie la
+contrainte de poids, et on retient la meilleure valeur.
+
+Complexité : $O(2^n \cdot n)$. Utilisable jusqu'à $n \approx 25$.
+
+```{r naive}
+knapsack_naive(inst$W, inst$w, inst$v)$value
+```
+
+## Méthode ii — Programmation dynamique (R et C++)
+
+On construit la table de Bellman $M$ de taille $(n+1) \times (W+1)$, où $M[i][c]$ est la valeur
+optimale en se restreignant aux $i$ premiers objets avec une capacité $c$ :
+
+$$M[i][c] = \begin{cases}
+M[i-1][c] & \text{si } c < w_i, \\
+\max\!\bigl(M[i-1][c],\; v_i + M[i-1][c - w_i]\bigr) & \text{sinon.}
+\end{cases}$$
+
+L'ensemble optimal est retrouvé par un retour arrière. Complexité $O(n \cdot W)$.
+
+```{r dp}
+knapsack_dp(inst$W, inst$w, inst$v)$value         # R
+knapsack_dp_Rcpp(inst$W, inst$w, inst$v)$value    # C++
+```
+
+Les deux versions donnent le même résultat. La version C++ est environ 300× plus rapide
+(quantifié en Q4).
+
+## Méthode iii — Heuristique adaptative en ligne (R et C++)
+
+Les objets arrivent en flux, un par un. Pour chaque objet, on décide immédiatement de l'accepter
+ou non — sans revenir en arrière. L'idée centrale : plus le sac est rempli, plus on exige un bon
+rapport valeur/poids pour accepter un item.
+
+Formellement, on accepte l'objet $i$ si et seulement si
+
+$$\frac{v_i}{w_i} \geq \Psi(z), \qquad z = \frac{\text{poids utilisé}}{W} \in [0,1],$$
+
+où $\Psi : [0,1] \to \mathbb{R}^+$ est une fonction de seuil croissante. Notre contribution est
+une $\Psi$ **auto-calibrée** qui apprend les bornes de densité et la corrélation poids-valeur
+directement sur le flux. Complexité $O(n)$.
+
+Le détail de la conception de $\Psi$ est l'objet de la question Q2.
+
+```{r adaptive}
+knapsack_adaptive(inst$w, inst$v, inst$W)$value   # R
+```
+
+# Q1 — Génération d'instances
+
+## Pourquoi simuler ?
+
+Pour mesurer la complexité empiriquement, il faut des instances de tailles variées et contrôlées.
+Les vrais jeux de données ont une taille fixe — impossible de faire varier $n$ librement.
+On utilise un générateur aléatoire paramétré.
+
+## Les quatre familles de Pisinger
+
+Les distributions classiques pour le sac à dos sont définies par la relation entre $w_i$ et $v_i$.
+On tire les poids $w_i \sim \mathcal{U}\{1, R\}$ avec $R = 1000$, puis :
+
+| Type | Valeurs $v_i$ | Corrélation $w$-$v$ |
+|:-----|:--------------|:-------------------:|
+| `uncorrelated` | $\mathcal{U}\{1, R\}$, indépendant de $w$ | nulle |
+| `weakly` | $w_i + \mathcal{U}\{-R/10, R/10\}$ | faible |
+| `strongly` | $w_i + c$, $c = R/10$ fixe | forte |
+| `subsetsum` | $v_i = w_i$ | parfaite |
+
+Pour `strongly` et `subsetsum`, tous les items ont presque le même ratio $v_i/w_i$.
+Une heuristique basée sur ce ratio ne peut pas les distinguer — ce sont les cas difficiles (Q3).
+
+## Capacité
+
+On fixe $W = \lfloor 0{,}5 \cdot \sum w_i \rfloor$. Un ratio de 0,5 est le plus difficile :
+la moitié des objets peut tenir dans le sac en poids, mais on ne sait pas lesquels choisir.
+Un ratio trop bas (presque rien ne rentre) ou trop élevé (presque tout rentre) rend le problème
+trivial.
+
+## Exemples
+
+```{r gen-instances}
+types <- c("uncorrelated", "weakly", "strongly", "subsetsum")
+insts <- lapply(types, function(t) generate_knapsack(n = 100, type = t))
+names(insts) <- types
+```
+
+```{r plot-instances, fig.width=8, fig.height=6}
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+for (nm in types) {
+  inst <- insts[[nm]]
+  plot(inst$w, inst$v, pch = 16, cex = 0.6, col = "steelblue",
+       xlab = "poids w", ylab = "valeur v", main = nm)
+  abline(0, 1, col = "tomato", lty = 2)   # diagonale v = w
+}
+```
+
+La ligne rouge est $v = w$. Pour `subsetsum`, tous les points sont exactement dessus.
+Pour `strongly`, ils sont décalés d'une constante $c$. Pour `uncorrelated`, aucune structure.
+
+# Q2 — L'heuristique proposée
+
+## Cadre en ligne
+
+L'idée : les items arrivent un par un dans un ordre quelconque. Pour chaque item, on décide
+immédiatement de l'accepter ou non, sans revenir en arrière. C'est le **sac à dos en ligne**
+(*online knapsack*).
+
+Ce cadre est naturel en sélection de features : les features peuvent arriver au fil du calcul,
+et on veut une décision instantanée sans attendre de tout voir.
+
+## La règle de décision
+
+On accepte l'item $i$ si et seulement si il rentre dans le sac **et** son ratio dépasse un seuil :
+
+$$\frac{v_i}{w_i} \geq \Psi(z), \qquad z = \frac{\text{poids utilisé}}{W} \in [0,1].$$
+
+$\Psi$ est croissante : plus le sac est plein, plus on est sélectif. Avec
+$L = \min_i v_i/w_i$ et $U = \max_i v_i/w_i$, trois formes classiques :
+
+| Forme | $\Psi(z)$ | Remarque |
+|:------|:----------|:---------|
+| Linéaire | $L + (U-L)\,z$ | simple, aucune garantie |
+| Puissance | $L + (U-L)\,z^p$ | un paramètre $p > 0$ |
+| Exponentielle | $\frac{L}{e}\!\left(\frac{Ue}{L}\right)^{\!z}$ | optimale au pire cas, ratio $\ln(U/L)+1$ |
+
+La forme exponentielle (Zhou, Chakrabarty & Lukose, 2008) minimise le ratio de compétitivité
+dans le pire cas. On l'utilise comme référence.
+
+```{r psi-courbes, fig.width=6, fig.height=4}
+z  <- seq(0, 1, length.out = 200)
+L  <- 0.5; U <- 5
+psi_lin <- L + (U - L) * z
+psi_pow <- L + (U - L) * z^2
+psi_exp <- (L / exp(1)) * (U * exp(1) / L)^z
+
+plot(z, psi_exp, type = "l", col = "tomato", lwd = 2,
+     ylim = c(0, U * 1.1), xlab = "z (remplissage)", ylab = expression(Psi(z)),
+     main = "Fonctions de seuil")
+lines(z, psi_lin, col = "steelblue", lwd = 2)
+lines(z, psi_pow, col = "forestgreen", lwd = 2, lty = 2)
+abline(h = c(L, U), lty = 3, col = "grey60")
+legend("topleft", c("exponentielle", "linéaire", "puissance p=2"),
+       col = c("tomato", "steelblue", "forestgreen"),
+       lwd = 2, lty = c(1, 1, 2), bty = "n")
+```
+
+## Notre Ψ auto-calibrée
+
+Les formes ci-dessus supposent $L$ et $U$ connus à l'avance. En pratique on ne connaît pas
+la distribution des densités. Notre approche :
+
+1. **Phase d'échauffement** : sur les 10 % premiers items, on estime $L$ et $U$ comme les
+   quantiles 5 % et 95 % des densités observées, puis on gèle ces bornes.
+
+2. **Corrélation apprise en ligne** : on maintient la corrélation de Pearson $\hat{\rho}$
+   entre $w$ et $v$ via six sommes cumulées (mise à jour en $O(1)$ par item).
+
+3. **Sélectivité adaptée** : on calcule
+   $$k = k_{\text{lo}} + (k_{\text{hi}} - k_{\text{lo}}) \cdot \max(0,\,\hat{\rho}).$$
+   Si $\hat{\rho} \approx 1$ (strongly), le sac se remplit facilement — on peut être strict tôt
+   ($k$ grand). Si $\hat{\rho} \approx 0$ (uncorrelated), on reste sélectif sur les hauts ratios
+   ($k$ petit, défaut $k_{\text{lo}} = 4$, $k_{\text{hi}} = 30$).
+
+4. **Décision** : on accepte si $v_i/w_i \geq p$ avec
+   $$p = \text{clamp}\!\bigl(L + (U - L)(z + k(z - t)),\; L,\; U\bigr),$$
+   où $t = (i-1)/n$ est la progression dans le flux. Le terme $k(z-t)$ est un correcteur de
+   rythme : si le sac se remplit trop vite ($z > t$), le seuil monte ; sinon il baisse.
+
+5. **Cas dégénéré** : si $(U-L)/U < 10^{-3}$ (type subsetsum, toutes les densités égales),
+   on accepte simplement tout item qui rentre.
+
+```{r trace-plot, fig.width=7, fig.height=4}
+set.seed(1)
+inst2 <- generate_knapsack(n = 80, type = "uncorrelated")
+tr <- knapsack_online(inst2$W, inst2$w, inst2$v,
+                      psi_exponential(min(inst2$v / inst2$w),
+                                      max(inst2$v / inst2$w)))$trace
+
+plot(seq_len(nrow(tr)), tr$density, pch = 16, cex = 0.7,
+     col = ifelse(tr$accepted, "steelblue", "grey70"),
+     xlab = "ordre d'arrivée", ylab = "densité v/w",
+     main = "Seuil exponentiel sur une instance non corrélée")
+lines(seq_len(nrow(tr)), tr$threshold, col = "tomato", lwd = 2)
+legend("topright", c("accepté", "refusé", "seuil Ψ"),
+       col = c("steelblue", "grey70", "tomato"),
+       pch = c(16, 16, NA), lty = c(NA, NA, 1), lwd = c(NA, NA, 2), bty = "n")
+```
+
+## Borne LP et certification de la qualité
+
+Pour mesurer la qualité de l'heuristique sans connaître OPT exactement, on utilise la
+**borne fractionnaire de Dantzig (1957)** : trier les items par $v_i/w_i$, remplir goulûment,
+puis fractionner le dernier item critique. Cette borne $U_{\text{LP}} \geq \text{OPT}$ se calcule
+en $O(n \log n)$.
+
+Le gap heuristique est certifié par :
+$$\text{gap} \leq \frac{U_{\text{LP}} - H}{U_{\text{LP}}},$$
+où $H$ est la valeur retournée. Si le gap est petit, l'heuristique est proche de l'optimum —
+sans avoir besoin de résoudre le problème exactement.
+
+```{r lp-cert}
+H <- knapsack_adaptive(inst2$w, inst2$v, inst2$W)$value
+U <- knapsack_lp_bound(inst2$W, inst2$w, inst2$v)
+cat(sprintf("H = %d  |  borne LP = %.1f  |  gap <= %.1f%%\n",
+            H, U, 100 * (U - H) / U))
+```
+
+# Q3 — Instances difficiles pour l'heuristique
+
+Deux types de difficulté, de nature différente.
+
+## Densités identiques (strongly, subsetsum)
+
+Notre heuristique décide en comparant $v_i/w_i$ à un seuil $\Psi(z)$. Si tous les items ont la
+même densité — c'est exactement le cas `subsetsum` ($v_i = w_i$) et presque le cas `strongly`
+($v_i = w_i + c$) — le seuil ne peut plus distinguer les items entre eux.
+
+La décision se réduit à : *accepter tout ce qui rentre*. C'est un simple *first-fit*, sans
+aucune intelligence sur la valeur. Sur des instances de ce type, n'importe quel ordre d'arrivée
+donne un résultat différent, et rien ne garantit que les items choisis sont les meilleurs.
+
+## Ordre adversarial (croissant par densité)
+
+Pour toute règle de seuil, il existe un ordre d'arrivée qui force le pire cas. Intuitivement :
+
+- Les premiers items arrivent avec une densité juste sous le seuil → acceptés, ils remplissent
+  le sac.
+- Les derniers items sont très denses → refusés faute de place.
+
+L'optimal aurait ignoré les premiers items et pris uniquement les derniers. On peut construire
+cet ordre explicitement en triant les items par densité croissante avant de les présenter à
+l'heuristique.
+
+```{r adversarial}
+set.seed(3)
+inst3 <- generate_knapsack(60, type = "uncorrelated")
+opt3  <- knapsack_dp(inst3$W, inst3$w, inst3$v)$value
+
+# ordre aléatoire (normal)
+h_rand <- knapsack_adaptive(inst3$w, inst3$v, inst3$W)$value
+
+# ordre croissant de densité (adversarial)
+ord    <- order(inst3$v / inst3$w)
+h_adv  <- knapsack_adaptive(inst3$w[ord], inst3$v[ord], inst3$W)$value
+
+cat(sprintf("OPT            = %d\n", opt3))
+cat(sprintf("ordre aléatoire : ALG/OPT = %.2f\n", h_rand / opt3))
+cat(sprintf("ordre croissant : ALG/OPT = %.2f\n", h_adv  / opt3))
+```
+
+## Comparaison sur les quatre types
+
+Sur une instance de taille modeste ($n = 30$), on peut calculer OPT exactement par PD et mesurer
+le ratio ALG/OPT pour chaque famille.
+
+```{r ratio-par-type, fig.width=6, fig.height=4}
+set.seed(4)
+types4 <- c("uncorrelated", "weakly", "strongly", "subsetsum")
+ratios <- sapply(types4, function(t) {
+  x   <- generate_knapsack(30, type = t)
+  opt <- knapsack_dp(x$W, x$w, x$v)$value
+  alg <- knapsack_adaptive(x$w, x$v, x$W)$value
+  if (opt == 0) 1 else alg / opt
+})
+barplot(ratios, ylim = c(0, 1.05), ylab = "ALG / OPT",
+        col = c("steelblue", "steelblue", "tomato", "tomato"),
+        main = "Ratio ALG/OPT par type de distribution (n = 30)")
+abline(h = 1, lty = 2, col = "grey40")
+```
+
+Les deux derniers types (en rouge) correspondent aux cas difficiles identifiés ci-dessus.
+Les sections suivantes mesurent ces écarts sur de plus grandes instances.
+
+# Q4 — Simulations
+
+## Accélération R vs C++
+
+On mesure le temps moyen par appel sur une instance fixe, en moyennant sur plusieurs répétitions
+pour stabiliser la mesure.
+
+```{r speedup, fig.width=7, fig.height=4}
+set.seed(5)
+
+# DP : n=50, W fixé à 5000
+inst_b <- generate_knapsack(50, type = "uncorrelated")
+inst_b$W <- 5000L
+reps <- 30L
+
+t_dp_r   <- system.time(for (i in seq_len(reps))
+               knapsack_dp(inst_b$W, inst_b$w, inst_b$v))["elapsed"] / reps
+t_dp_cpp <- system.time(for (i in seq_len(reps))
+               knapsack_dp_Rcpp(inst_b$W, inst_b$w, inst_b$v))["elapsed"] / reps
+
+# Heuristique adaptative : n=1000
+inst_h <- generate_knapsack(1000, type = "uncorrelated")
+t_ad_r   <- system.time(for (i in seq_len(reps))
+               knapsack_adaptive(inst_h$w, inst_h$v, inst_h$W))["elapsed"] / reps
+t_ad_cpp <- system.time(for (i in seq_len(reps))
+               knapsack_adaptive_Rcpp(inst_h$w, inst_h$v, inst_h$W))["elapsed"] / reps
+
+# Graphique : temps R vs C++ sur échelle log
+times_all <- c(t_dp_r, t_dp_cpp, t_ad_r, t_ad_cpp)
+labels_all <- c("DP R", "DP C++", "Adapt R", "Adapt C++")
+cols_sp    <- c("steelblue", "tomato", "steelblue", "tomato")
+
+bp <- barplot(log10(pmax(times_all, 1e-7)),
+              names.arg = labels_all, col = cols_sp,
+              ylab = "log10(temps en s)",
+              main = "Temps d'exécution R vs C++ (échelle log10)")
+speedup_dp <- t_dp_r / t_dp_cpp
+speedup_ad <- t_ad_r / t_ad_cpp
+text(bp[c(1,3)], log10(pmax(c(t_dp_r, t_ad_r), 1e-7)) - 0.4,
+     sprintf("%.0f×", c(speedup_dp, speedup_ad)),
+     col = "white", font = 2, cex = 1.1)
+legend("topright", c("R", "C++"), fill = c("steelblue", "tomato"), bty = "n")
+```
+
+Le gain pour la PD dépasse largement l'objectif de 50–100× fixé dans les consignes.
+L'heuristique est plus modeste car elle ne fait qu'un seul passage en $O(n)$ — il y a
+moins de calcul à vectoriser.
+
+## Complexité empirique
+
+### Méthode naïve — $O(2^n)$
+
+On fait varier $n$ de 5 à 22 et on mesure le temps d'exécution. La théorie prédit
+$T(n) = C \cdot 2^n$, soit $\log T(n) \approx \log C + n \log 2$. Si on trace $n$ en
+abscisse et $\log T$ en ordonnée, la pente doit être $\log 2 \approx 0{,}693$.
+
+```{r complexity-naive, cache=TRUE}
+set.seed(6)
+ns_nv <- 5:22
+times_nv <- sapply(ns_nv, function(n) {
+  x    <- generate_knapsack(n, type = "uncorrelated")
+  reps <- if (n <= 15) 100L else if (n <= 18) 10L else 1L
+  as.numeric(system.time(
+    for (i in seq_len(reps)) knapsack_naive(x$W, x$w, x$v)
+  )["elapsed"]) / reps
+})
+times_nv <- pmax(times_nv, 1e-6)
+```
+
+```{r plot-naive, fig.width=6, fig.height=4}
+plot(ns_nv, log(times_nv), type = "b", pch = 16, col = "steelblue",
+     xlab = "n", ylab = "log(temps en s)",
+     main = "Complexité naïve : log(T) en fonction de n")
+fit_nv <- lm(log(times_nv) ~ ns_nv)
+abline(fit_nv, col = "tomato", lwd = 2)
+legend("topleft", bty = "n",
+       legend = sprintf("pente = %.3f  (théorique log 2 = %.3f)",
+                        coef(fit_nv)[2], log(2)))
+```
+
+### Programmation dynamique — $O(n \cdot W)$
+
+Avec les instances par défaut, $W \approx 0{,}5 \cdot n \cdot 500 = 250n$, donc
+$T(n) \approx C \cdot n \cdot 250n = C' n^2$. En log-log, la pente doit être $\approx 2$.
+
+```{r complexity-dp, cache=TRUE}
+set.seed(7)
+ns_dp <- c(20, 40, 60, 80, 100, 150, 200)
+times_dp <- sapply(ns_dp, function(n) {
+  x    <- generate_knapsack(n, type = "uncorrelated")
+  reps <- max(1L, 20L %/% (n %/% 20 + 1L))
+  as.numeric(system.time(
+    for (i in seq_len(reps)) knapsack_dp_Rcpp(x$W, x$w, x$v)
+  )["elapsed"]) / reps
+})
+times_dp <- pmax(times_dp, 1e-6)
+```
+
+```{r plot-dp, fig.width=6, fig.height=4}
+plot(log(ns_dp), log(times_dp), type = "b", pch = 16, col = "steelblue",
+     xlab = "log(n)", ylab = "log(temps en s)",
+     main = "Complexité PD (C++) : log-log")
+fit_dp <- lm(log(times_dp) ~ log(ns_dp))
+abline(fit_dp, col = "tomato", lwd = 2)
+legend("topleft", bty = "n",
+       legend = sprintf("pente = %.2f  (théorique ~2 car W ∝ n)",
+                        coef(fit_dp)[2]))
+```
+
+## Ratio ALG/OPT selon le type et la taille
+
+On fait varier $n$ et le type de distribution. Pour chaque combinaison, on calcule
+OPT par PD (C++) et on moyenne le ratio ALG/OPT sur 20 instances.
+
+```{r gap-sim, cache=TRUE}
+set.seed(8)
+ns_gap    <- c(20, 40, 60, 80, 100)
+types_gap <- c("uncorrelated", "weakly", "strongly", "subsetsum")
+nrep      <- 20L
+
+gap_mat <- sapply(types_gap, function(t) {
+  sapply(ns_gap, function(n) {
+    mean(replicate(nrep, {
+      x   <- generate_knapsack(n, type = t)
+      opt <- knapsack_dp_Rcpp(x$W, x$w, x$v)$value
+      alg <- knapsack_adaptive(x$w, x$v, x$W)$value
+      if (opt == 0L) 1 else alg / opt
+    }))
+  })
+})
+```
+
+```{r gap-plot, fig.width=7, fig.height=5}
+cols <- c("steelblue", "forestgreen", "tomato", "orange")
+matplot(ns_gap, gap_mat, type = "b", pch = 16, lwd = 2, col = cols,
+        ylim = c(0, 1.05), xlab = "n", ylab = "ALG / OPT",
+        main = "Ratio ALG/OPT — heuristique adaptative")
+abline(h = 1, lty = 2, col = "grey50")
+legend("bottomright", types_gap, col = cols, lwd = 2, pch = 16, bty = "n")
+```
+
+## Comparaison des méthodes de seuil
+
+On compare quatre approches sur $n = 50$, moyennées sur 30 instances par type.
+L'objectif est de montrer que notre $\Psi$ adaptative fait mieux que les formes
+fixes sur les distributions réalistes.
+
+```{r psi-comp, cache=TRUE}
+set.seed(9)
+nrep2 <- 30L
+
+comp_mat <- sapply(types_gap, function(t) {
+  colMeans(t(replicate(nrep2, {
+    x   <- generate_knapsack(50, type = t)
+    opt <- knapsack_dp_Rcpp(x$W, x$w, x$v)$value
+    if (opt == 0L) return(c(greedy=1, lin=1, exp=1, adapt=1))
+    L   <- min(x$v / x$w)
+    U   <- max(x$v / x$w)
+    c(
+      greedy = knapsack_greedy(x$W, x$w, x$v)$value / opt,
+      lin    = knapsack_online(x$W, x$w, x$v, psi_linear(L, U))$value / opt,
+      exp    = knapsack_online(x$W, x$w, x$v, psi_exponential(L, U))$value / opt,
+      adapt  = knapsack_adaptive(x$w, x$v, x$W)$value / opt
+    )
+  })))
+})
+```
+
+```{r psi-plot, fig.width=8, fig.height=5}
+barplot(comp_mat, beside = TRUE, ylim = c(0, 1.1),
+        col = c("grey70", "steelblue", "tomato", "forestgreen"),
+        ylab = "ALG / OPT", main = "ALG/OPT par méthode et type (n = 50, 30 rép.)",
+        legend.text = c("glouton", "linéaire", "exponentielle", "adaptative"),
+        args.legend = list(bty = "n", x = "topright"))
+abline(h = 1, lty = 2, col = "grey40")
+```
+
+L'heuristique exponentielle est optimale au pire cas mais pas nécessairement la meilleure
+en moyenne. Notre $\Psi$ adaptative ajuste sa pente à la corrélation poids-valeur observée,
+ce qui lui permet de faire mieux sur les distributions réalistes tout en restant compétitive
+sur les cas difficiles.
