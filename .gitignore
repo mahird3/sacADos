@@ -12,3 +12,5 @@ inst/report/*_files/
 inst/report/*.tex
 inst/report/*.log
 .DS_Store
+inst/report/rapport_cache/
+inst/report/rapport.html
